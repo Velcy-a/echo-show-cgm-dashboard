@@ -30,8 +30,9 @@ Fully Kiosk Browser shows the number full-screen with high/low alarms.
 
 - **An Echo Show 5, 2nd gen (2021, codename "cronos")**, unlocked and running
   LineageOS 18.1. That's the setup this was built and tested on. Unlock it with
-  [this XDA guide](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-show-5-2nd-gen-2021-cronos.4772596/),
-  then flash the unofficial LineageOS 18.1 build for cronos, also on XDA.
+  [Rortiz2's XDA guide](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-show-5-2nd-gen-2021-cronos.4772596/),
+  then flash the
+  [unofficial LineageOS 18.1 build for cronos](https://xdaforums.com/t/rom-unofficial-11-cronos-lineageos-18-1-for-the-amazon-echo-show-5-2021.4772598/).
   Any other Android device that runs Termux should work too.
 - **A FreeStyle Libre sensor shared to LibreLinkUp.** Make a LibreLinkUp
   account, accept the invite from the LibreLink app, and sign in to the
@@ -161,10 +162,11 @@ the redirect next time.
 
 ### 6. Fully Kiosk Browser settings
 
+All of these are in the free version; nothing here needs a Fully PLUS license.
+
 - **Start URL:** `http://localhost:5000`
-- **Web Content Settings → Autoplay Videos:** on (and **Autoplay Audio** if
-  your version has it). Without it, the page asks for one tap after each
-  load before it can play the alarm.
+- **Web Content Settings → Autoplay Audio:** on. Without it, the page asks
+  for one tap after each load before it can play the alarm.
 - **Device Management → Keep Screen On:** on
 - **Auto reload after page error:** on, so the page recovers if it loads
   before the server is up
@@ -248,11 +250,20 @@ with its age.
 
 ## Credits
 
+This project is only the dashboard. It wouldn't run without:
+
+- **Echo Show 5 unlock** (amonet for cronos) by
+  [Rortiz2 / R0rt1z2](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-show-5-2nd-gen-2021-cronos.4772596/),
+  building on xyz\`'s original amonet exploit, with help from AntiEngineer,
+  alextrack2013 and gilderchuck
+- **LineageOS 18.1 for cronos** by
+  [bengris32, R0rt1z2 and FieryFlames](https://xdaforums.com/t/rom-unofficial-11-cronos-lineageos-18-1-for-the-amazon-echo-show-5-2021.4772598/)
 - [pylibrelinkup](https://github.com/robberwick/pylibrelinkup) by Rob Berwick
   (MIT) for the LibreLinkUp client
 - [android-pydantic-core](https://github.com/Eutalix/android-pydantic-core)
   by Talisson Matheus (MIT) for the prebuilt pydantic-core
-- [Fully Kiosk Browser](https://www.fully-kiosk.com/) for the kiosk display
+- [Termux](https://termux.dev/), [Flask](https://flask.palletsprojects.com/)
+  and [Fully Kiosk Browser](https://www.fully-kiosk.com/)
 
 FreeStyle Libre and LibreLinkUp are trademarks of Abbott. Echo Show is a
 trademark of Amazon. This project isn't affiliated with either company.
