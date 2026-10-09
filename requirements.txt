@@ -1,0 +1,2 @@
+flask>=3.0
+pylibrelinkup>=0.11

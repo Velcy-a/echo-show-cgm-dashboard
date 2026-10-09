@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>CGM</title>
+<style>
+  /* Conservative CSS/JS on purpose (no flex `gap`, no clamp(), no optional
+     chaining) so it runs even if LineageOS's system WebView is never
+     updated. Sized in vw/vh so the 960x480 layout also scales elsewhere. */
+  :root {
+    --bg: #000;
+    --fg: #f5f5f5;
+    --dim: #8c8c8c;
+    --ok: #3dff8b;
+    --high: #ffb300;
+    --low-a: #9c0000;
+    --low-b: #e00000;
+    --stale: #6e6e6e;
+  }
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    cursor: none;
+  }
+
+  #main {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    bottom: 13vh;
+    display: flex;
+    align-items: center;
+    padding: 0 2vw 0 3vw;
+  }
+  #value-wrap {
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+  #value {
+    flex: none;
+    font-family: "sans-serif-condensed", "Roboto Condensed", "Arial Narrow", Roboto, sans-serif;
+    font-weight: 700;
+    font-size: 70vh;              /* replaced by fitValue() */
+    line-height: 0.8;
+    letter-spacing: -0.03em;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    color: var(--ok);
+    transition: color 0.4s;
+  }
+  #side {
+    flex: 0 0 23vw;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+  #arrow {
+    width: 21vw;
+    height: 21vw;
+    max-height: 58vh;
+    fill: currentColor;
+    color: var(--fg);
+    transition: transform 0.6s ease;
+  }
+  #arrow.hidden { visibility: hidden; }
+  #units {
+    margin-top: 1vh;
+    font-size: 5.5vh;
+    color: var(--dim);
+    letter-spacing: 0.05em;
+  }
+
+  #bar {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    height: 13vh;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 3vw;
+    border-top: 1px solid #222;
+    font-size: 6vh;
+    color: #c8c8c8;
+    white-space: nowrap;
+  }
+  #age   { flex: 0 0 auto; }
+  #status {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 0 2vw;
+    text-align: center;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+  }
+  #clock { flex: 0 0 auto; }
+
+  #hint {
+    position: absolute;
+    left: 0; right: 0; bottom: 13vh;
+    padding: 1vh 3vw;
+    text-align: center;
+    background: #3a2a00;
+    color: var(--high);
+    font-size: 4.5vh;
+  }
+  .hide   { display: none; }
+
+  /* ---- states (always paired with a text label, never colour alone) ---- */
+  .state-inrange #value { color: var(--ok); }
+  .state-high #value    { color: var(--high); }
+  .state-high #status   { color: var(--high); }
+  .state-low            { animation: lowpulse 1.2s ease-in-out infinite; }
+  .state-low #value,
+  .state-low #arrow,
+  .state-low #status,
+  .state-low #units,
+  .state-low #bar       { color: #fff; }
+  .state-low #bar       { border-top-color: rgba(255, 255, 255, 0.3); }
+  .state-loading #value { color: var(--dim); }
+  .stale #value,
+  .stale #arrow         { color: var(--stale); }
+  .stale #status        { color: var(--high); }
+  .state-low.stale #value { color: #ffd0d0; }
+
+  @keyframes lowpulse {
+    0%, 100% { background-color: var(--low-a); }
+    50%      { background-color: var(--low-b); }
+  }
+</style>
+</head>
+<body class="state-loading">
+
+<main id="main">
+  <div id="value-wrap"><span id="value">--</span></div>
+  <div id="side">
+    <!-- Points right (stable); rotated by trend in JS. -->
+    <svg id="arrow" class="hidden" viewBox="0 0 100 100" aria-hidden="true">
+      <polygon points="6,39 56,39 56,14 96,50 56,86 56,61 6,61"></polygon>
+    </svg>
+    <div id="units">mg/dL</div>
+  </div>
+</main>
+
+<footer id="bar">
+  <span id="age">Connecting&hellip;</span>
+  <span id="status"></span>
+  <span id="clock"></span>
+</footer>
+
+<div id="hint" class="hide"></div>
+
+<audio id="alarm" preload="auto" loop></audio>
+
+<script>window.CGM_CONFIG = {{ config|tojson }};</script>
+<script>
+(function () {
+  'use strict';
+
+  var C = window.CGM_CONFIG;
+  var $ = function (id) { return document.getElementById(id); };
+  var body = document.body;
+  var els = {
+    wrap: $('value-wrap'), value: $('value'), arrow: $('arrow'),
+    age: $('age'), status: $('status'), clock: $('clock'),
+    hint: $('hint'), audio: $('alarm')
+  };
+
+  // Trend (pylibrelinkup.Trend) -> arrow rotation in degrees. 0 = unknown.
+  var ROTATION = { 1: 90, 2: 45, 3: 0, 4: -45, 5: -90 };
+  var LABEL = { low: 'LOW', high: 'HIGH', inrange: 'IN RANGE' };
+
+  var data = null;          // last payload from /api/data
+  var serverOffset = 0;     // server clock minus browser clock, ms
+  var serverDown = false;   // local Flask not answering
+  var shownText = null;     // text currently sized by fitValue()
+  var pollTimer = null;
+
+  var snoozeUntil = 0;
+  var alarmOn = false;      // alarm state is active (visual + wants sound)
+  var soundPlaying = false;
+  var soundAllowed = false; // a play() has succeeded at least once
+  var soundBroken = false;  // alarm.mp3 failed to load
+
+  // ------------------------------------------------------------------ fetch
+
+  // fetch() with a hard timeout. Without AbortController (very old
+  // WebViews) the request can't be cancelled, but the promise still
+  // settles, so the polling chain never stalls.
+  function fetchJSON(url, timeoutMs) {
+    return new Promise(function (resolve, reject) {
+      var ctrl = window.AbortController ? new AbortController() : null;
+      var settled = false;
+      var timer = setTimeout(function () {
+        if (settled) { return; }
+        settled = true;
+        if (ctrl) { ctrl.abort(); }
+        reject(new Error('timeout'));
+      }, timeoutMs);
+      var opts = { cache: 'no-store' };
+      if (ctrl) { opts.signal = ctrl.signal; }
+      fetch(url + '?_=' + Date.now(), opts)
+        .then(function (r) {
+          if (!r.ok) { throw new Error('HTTP ' + r.status); }
+          return r.json();
+        })
+        .then(function (json) {
+          if (settled) { return; }
+          settled = true; clearTimeout(timer); resolve(json);
+        }, function (err) {
+          if (settled) { return; }
+          settled = true; clearTimeout(timer); reject(err);
+        });
+    });
+  }
+
+  function poll() {
+    clearTimeout(pollTimer);
+    fetchJSON('/api/data', 10000).then(function (json) {
+      data = json;
+      serverDown = false;
+      if (json.server_time_ms) { serverOffset = json.server_time_ms - Date.now(); }
+      render();
+      // Every 60 s normally; retry quickly only until the first reading exists.
+      schedule(json.value == null ? 5000 : C.pollMs);
+    }, function () {
+      serverDown = true;
+      render();
+      schedule(15000);
+    });
+  }
+
+  function schedule(ms) {
+    clearTimeout(pollTimer);
+    pollTimer = setTimeout(poll, ms);
+  }
+
+  // ----------------------------------------------------------------- render
+
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+
+  function hhmm(date) {
+    try {
+      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } catch (e) {
+      return pad(date.getHours()) + ':' + pad(date.getMinutes());
+    }
+  }
+
+  function ageText(ms) {
+    var min = Math.floor(ms / 60000);
+    if (min < 1) { return 'just now'; }
+    if (min < 60) { return min + ' min ago'; }
+    var h = Math.floor(min / 60);
+    return h + ' h ' + (min % 60) + ' min ago';
+  }
+
+  // Make the number as large as the area allows (height first, then shrink
+  // to the available width). Text width scales linearly with font size, so
+  // one measurement is enough.
+  function fitValue(text) {
+    if (text === shownText && els.value.style.fontSize) { return; }
+    shownText = text;
+    els.value.textContent = text;
+    var maxW = els.wrap.clientWidth * 0.98;
+    var size = Math.floor(els.wrap.clientHeight / 0.8);
+    els.value.style.fontSize = size + 'px';
+    var w = els.value.offsetWidth;
+    if (w > maxW) {
+      els.value.style.fontSize = Math.floor(size * maxW / w) + 'px';
+    }
+  }
+
+  function setState(range, stale) {
+    var cls = 'state-' + range;
+    if (stale) { cls += ' stale'; }
+    if (body.className !== cls) { body.className = cls; }
+  }
+
+  function render() {
+    var now = Date.now() + serverOffset;
+    els.clock.textContent = hhmm(new Date());
+
+    if (!data || data.value == null) {
+      setState('loading', false);
+      fitValue('--');
+      els.arrow.setAttribute('class', 'hidden');
+      els.age.textContent = serverDown ? 'Server offline' : 'Connecting…';
+      els.status.textContent = (data && data.error) ? data.error : '';
+      updateAlarm(null);
+      return;
+    }
+
+    var v = data.value;
+    var range = v < C.low ? 'low' : (v > C.high ? 'high' : 'inrange');
+    var ageMs = Math.max(0, now - data.timestamp_ms);
+    var stale = ageMs > C.staleMs;
+
+    setState(range, stale);
+    fitValue(String(v));
+
+    var rot = ROTATION[data.trend];
+    if (rot === undefined || stale) {
+      els.arrow.setAttribute('class', 'hidden');
+    } else {
+      els.arrow.setAttribute('class', '');
+      els.arrow.style.transform = 'rotate(' + rot + 'deg)';
+    }
+
+    els.age.textContent = ageText(ageMs) + ' · ' + hhmm(new Date(data.timestamp_ms - serverOffset));
+
+    updateAlarm(range);
+
+    var status = stale ? 'NO SIGNAL' : LABEL[range];
+    if (range !== 'inrange' && Date.now() < snoozeUntil) {
+      status += ' · muted ' + Math.ceil((snoozeUntil - Date.now()) / 60000) + ' min';
+    } else if (alarmOn) {
+      // Footer, not an overlay, so the number is never covered.
+      status += ' · tap to mute';
+    }
+    // Problems fetching data outrank the range label; the background
+    // colour and the alarm still reflect the last known value.
+    if (data.status === 'error' && data.error) { status = data.error; }
+    if (serverDown) { status = 'Dashboard server not responding'; }
+    els.status.textContent = status;
+  }
+
+  // ------------------------------------------------------------------ alarm
+
+  function updateAlarm(range) {
+    var outOfRange = range === 'low' || range === 'high';
+    if (!outOfRange) {
+      snoozeUntil = 0;              // back in range re-arms the alarm
+      setAlarm(false);
+      return;
+    }
+    setAlarm(Date.now() >= snoozeUntil);
+  }
+
+  function setAlarm(on) {
+    alarmOn = on;
+    if (on) {
+      wakeScreen();
+      playSound();
+    } else {
+      stopSound();
+    }
+  }
+
+  function playSound() {
+    if (soundPlaying || soundBroken) { return; }
+    els.audio.volume = 1;
+    els.audio.muted = false;
+    soundPlaying = true;
+    var p;
+    try { p = els.audio.play(); } catch (e) { soundPlaying = false; return; }
+    if (p && typeof p.then === 'function') {
+      p.then(function () {
+        soundAllowed = true;
+        hideHint();
+        if (!alarmOn) { stopSound(); }     // alarm cleared while starting
+      }, function (err) {
+        soundPlaying = false;
+        handlePlayError(err);
+      });
+    } else {
+      soundAllowed = true;
+    }
+  }
+
+  function stopSound() {
+    if (!soundPlaying) { return; }
+    soundPlaying = false;
+    try { els.audio.pause(); els.audio.currentTime = 0; } catch (e) { /* ignore */ }
+  }
+
+  function handlePlayError(err) {
+    if (err && err.name === 'NotAllowedError') {
+      showHint('Tap the screen once to enable the alarm sound');
+    } else {
+      soundBroken = true;
+      showHint('Alarm sound unavailable — check static/alarm.mp3');
+    }
+  }
+
+  function showHint(text) { els.hint.textContent = text; els.hint.className = ''; }
+  function hideHint() { els.hint.className = 'hide'; }
+
+  // Fully Kiosk's JavaScript Interface (Settings > Advanced Web Settings)
+  // lets the page wake a sleeping screen. Harmless if it isn't enabled.
+  function wakeScreen() {
+    try {
+      if (window.fully && typeof window.fully.turnScreenOn === 'function') {
+        window.fully.turnScreenOn();
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  // Autoplay probe: a near-silent play() tells us at load time whether the
+  // WebView allows sound without a tap (Fully: "Autoplay Audio" enabled).
+  function probeAutoplay() {
+    els.audio.volume = 0.01;
+    var p;
+    try { p = els.audio.play(); } catch (e) { return; }
+    if (!p || typeof p.then !== 'function') { finishProbe(); soundAllowed = true; return; }
+    p.then(function () {
+      soundAllowed = true;
+      finishProbe();
+    }, function (err) {
+      els.audio.volume = 1;
+      handlePlayError(err);
+    });
+  }
+
+  function finishProbe() {
+    if (!alarmOn) {
+      try { els.audio.pause(); els.audio.currentTime = 0; } catch (e) { /* ignore */ }
+    }
+    els.audio.volume = 1;
+  }
+
+  // A tap silences an active alarm for C.snoozeMs and, as a user gesture,
+  // also unlocks audio on WebViews that block autoplay. It must run on
+  // touchend: Chromium only counts touchend/mousedown/pointerup as a user
+  // activation, so play() called from touchstart is still blocked.
+  function onTap(ev) {
+    // Stops the emulated mousedown/click that would run onTap a second time.
+    if (ev && ev.type === 'touchend') { ev.preventDefault(); }
+    if (alarmOn) {
+      snoozeUntil = Date.now() + C.snoozeMs;
+      setAlarm(false);
+      render();
+    }
+    if (!soundAllowed && !soundBroken) {
+      els.audio.muted = true;
+      var p;
+      try { p = els.audio.play(); } catch (e) { els.audio.muted = false; return; }
+      var done = function () {
+        if (!alarmOn) { try { els.audio.pause(); els.audio.currentTime = 0; } catch (e) { /* ignore */ } }
+        els.audio.muted = false;
+      };
+      if (p && typeof p.then === 'function') {
+        p.then(function () { soundAllowed = true; hideHint(); done(); },
+               function () { els.audio.muted = false; });
+      } else {
+        soundAllowed = true; hideHint(); done();
+      }
+    }
+  }
+
+  // ------------------------------------------------------------------- boot
+
+  els.audio.addEventListener('error', function () {
+    soundBroken = true;
+    soundPlaying = false;
+    showHint('Alarm sound unavailable — check static/alarm.mp3');
+  });
+  els.audio.src = C.alarmUrl;
+
+  document.addEventListener('touchend', onTap, { passive: false });
+  document.addEventListener('mousedown', onTap);
+  window.addEventListener('resize', function () { shownText = null; render(); });
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) { poll(); }
+  });
+
+  setInterval(render, 15000);   // keeps "x min ago", clock and snooze current
+  render();
+  probeAutoplay();
+  poll();
+})();
+</script>
+</body>
+</html>
