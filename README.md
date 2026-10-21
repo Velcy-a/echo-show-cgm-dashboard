@@ -47,107 +47,102 @@ Fully Kiosk Browser shows the number full-screen with high/low alarms.
 1. In LineageOS, enable USB debugging: **Settings → About tablet**, tap
    **Build number** 7 times, then **Settings → System → Advanced → Developer
    options → USB debugging**.
-2. Install [Termux](https://github.com/termux/termux-app/releases) and
+2. Install [Termux](https://github.com/termux/termux-app/releases),
+   [Termux:Boot](https://github.com/termux/termux-boot/releases) and
    [Fully Kiosk Browser](https://www.fully-kiosk.com/) from your computer.
-   Pick the Termux APK that matches the CPU:
+   Get Termux and Termux:Boot from the same place (both from GitHub, or both
+   from F-Droid), because the two builds can't be mixed. Pick the Termux APK
+   that matches the CPU:
    ```bash
    adb shell getprop ro.product.cpu.abi      # arm64-v8a or armeabi-v7a
    adb install termux-app_<version>+github-debug_<that-abi>.apk
+   adb install termux-boot-app_<version>+github.debug.apk
    adb install <fully-kiosk>.apk
    ```
-3. Stop Android from killing Termux in the background: **Settings → Apps &
-   notifications → Special app access → Battery optimization → All apps →
-   Termux → Don't optimize**.
+   Then **tap Termux:Boot's icon once** on the Echo. Until you do, Android
+   never runs its startup job (opening it through adb doesn't count).
+3. Stop Android from holding Termux back in the background: **Settings → Apps
+   & notifications → Special app access → Battery optimization → All apps**,
+   and set both **Termux** and **Termux:Boot** to **Don't optimize**. Without
+   this, Android can sit on Termux:Boot's startup job after a reboot and the
+   dashboard never starts.
 
 > **Tip:** typing on a 5-inch screen is painful. You can type any command
 > into the open Termux window from your computer:
 > `adb shell "input text 'your command here' && input keyevent 66"`
 
-### 2. Install Python and the libraries
+### 2. Install the dashboard
 
 Open Termux on the Echo and run:
 
 ```bash
-pkg update -y && pkg upgrade -y
-pkg install -y python python-pip git nano
+curl -fsSLO https://raw.githubusercontent.com/Velcy-a/echo-show-cgm-dashboard/main/install.sh && bash install.sh
 ```
 
-`pylibrelinkup` needs `pydantic-core`, which is written in Rust and has no
-official Android build. Compiling it on the Echo fails: it runs out of
-memory, even with a swap file. Install a prebuilt build from
-[android-pydantic-core](https://github.com/Eutalix/android-pydantic-core)
-instead:
+[`install.sh`](install.sh) does the rest. It updates Termux, installs Python,
+Flask and pylibrelinkup, downloads the dashboard into `~/cgm-dashboard`, asks
+for your LibreLinkUp email and password, and sets it up to start
+automatically. It takes a few minutes.
 
-```bash
-cd ~
-curl -O https://raw.githubusercontent.com/Eutalix/android-pydantic-core/main/install_pydantic_core.sh
-bash install_pydantic_core.sh
-pip install flask pylibrelinkup
-python -c "import flask, pylibrelinkup; print('OK')"
-```
-
-That installer picks the build matching your Python version and CPU from the
-project's GitHub releases, which GitHub Actions compiles from the official
-pydantic source. It's a third-party project, so read the script before you
-run it.
+One dependency, `pydantic-core`, is written in Rust and has no official
+Android build, and compiling it on the Echo runs out of memory. So the
+installer uses a prebuilt build from
+[android-pydantic-core](https://github.com/Eutalix/android-pydantic-core),
+compiled by GitHub Actions from the official pydantic source. It's a
+third-party project, so read both scripts first if you like.
 
 <details>
-<summary>Compiling pydantic-core yourself instead</summary>
-
-This works on stronger Android devices; on the Echo it ran out of memory.
+<summary>Installing by hand instead</summary>
 
 ```bash
-pkg install -y rust binutils
-termux-wake-lock
-export ANDROID_API_LEVEL=$(getprop ro.build.version.sdk)   # 30 on LineageOS 18.1
-export CARGO_BUILD_JOBS=1 CARGO_PROFILE_RELEASE_LTO=off
-export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 CARGO_PROFILE_RELEASE_OPT_LEVEL=1
-pip install flask pylibrelinkup
-```
+pkg upgrade -y && pkg install -y python python-pip git nano
+curl -O https://raw.githubusercontent.com/Eutalix/android-pydantic-core/main/install_pydantic_core.sh
+bash install_pydantic_core.sh
+pip install --only-binary=pydantic-core flask pylibrelinkup
 
-If you add a swap file to get through the build, delete it afterwards. The
-Echo only has 8 GB of storage, and a full disk breaks downloads with errors
-like `curl: failed writing body`.
-</details>
-
-### 3. Get the dashboard
-
-```bash
 git clone https://github.com/Velcy-a/echo-show-cgm-dashboard.git ~/cgm-dashboard
 cd ~/cgm-dashboard
-cp config.env.example config.env
-nano config.env          # set LIBRE_EMAIL, LIBRE_PASSWORD, LIBRE_REGION
+cp config.env.example config.env && nano config.env   # email, password, region
 chmod 600 config.env
+
+mkdir -p ~/.termux/boot
+printf '#!/data/data/com.termux/files/usr/bin/sh\ntermux-wake-lock\ncd /data/data/com.termux/files/home/cgm-dashboard && ./start.sh >> server.log 2>&1\n' > ~/.termux/boot/cgm-boot.sh
+chmod +x ~/.termux/boot/cgm-boot.sh
 ```
 
 Keep it in Termux's home folder (`~`). Android won't run scripts from
 `/sdcard`, so starting it from Downloads fails with *Permission denied*.
 
-If editing on the Echo is too fiddly, fill in `config.env` on your computer
-and push it over. Run `termux-setup-storage` once in Termux and tap **Allow**
-first:
+To compile pydantic-core yourself on a stronger device, replace the two
+`install_pydantic_core.sh` lines with:
 
 ```bash
-adb push config.env /sdcard/Download/                       # on the computer
-cp ~/storage/downloads/config.env ~/cgm-dashboard/          # in Termux
+pkg install -y rust binutils
+export ANDROID_API_LEVEL=$(getprop ro.build.version.sdk)   # 30 on LineageOS 18.1
+export CARGO_BUILD_JOBS=1 CARGO_PROFILE_RELEASE_LTO=off
+export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 CARGO_PROFILE_RELEASE_OPT_LEVEL=1
 ```
 
-A `config.env` saved with Windows line endings works fine.
+and drop `--only-binary=pydantic-core` from the `pip install` line. If you add
+a swap file to get through the build, delete it afterwards. The Echo only has
+8 GB of storage, and a full disk breaks downloads with errors like
+`curl: failed writing body`.
+</details>
 
-### 4. Test with fake data
+### 3. Test with fake data
 
 ```bash
-./start.sh --mock
+cd ~/cgm-dashboard && ./start.sh --mock
 ```
 
 Open Fully Kiosk Browser (settings below). The fake reading swings from about
 45 to 215 mg/dL over 20 minutes, so you'll see and hear both alarms. Press
 **CTRL** then **c** in Termux to stop it.
 
-### 5. Run it for real
+### 4. Run it for real
 
 ```bash
-./start.sh
+cd ~/cgm-dashboard && ./start.sh
 ```
 
 ```
@@ -157,10 +152,10 @@ Open Fully Kiosk Browser (settings below). The fake reading swings from about
 ```
 
 If your account lives in another region, the log says so and the login
-follows the redirect automatically. Put that region in `LIBRE_REGION` to skip
-the redirect next time.
+follows the redirect automatically. Put that region in `LIBRE_REGION` in
+`config.env` to skip the redirect next time.
 
-### 6. Fully Kiosk Browser settings
+### 5. Fully Kiosk Browser settings
 
 All of these are in the free version; nothing here needs a Fully PLUS license.
 
@@ -168,38 +163,31 @@ All of these are in the free version; nothing here needs a Fully PLUS license.
 - **Web Content Settings → Autoplay Audio:** on. Without it, the page asks
   for one tap after each load before it can play the alarm.
 - **Device Management → Keep Screen On:** on
-- **Auto reload after page error:** on, so the page recovers if it loads
-  before the server is up
+- **Device Management → Launch on Boot:** on. Android 10 and newer also
+  need **Settings → Apps & notifications → Special app access → Display over
+  other apps → Fully Kiosk Browser → Allow**, or Android blocks Fully from
+  opening at startup.
+- **Web Auto Reload → Auto Reload after Page Error:** 10 seconds. Fully
+  usually starts before the server does; this makes it retry until the
+  dashboard loads.
 - Turn the media volume up. The alarm plays through the media stream.
 
-### 7. Start automatically after a power cut
-
-The Echo has no battery, so any power blip reboots it. Without this step the
-dashboard stays down until you start it again by hand.
-
-Install **Termux:Boot** from the same place you got Termux (builds from
-F-Droid and GitHub can't be mixed), open it once, then:
-
-```bash
-mkdir -p ~/.termux/boot
-cat > ~/.termux/boot/cgm-dashboard <<'EOF'
-#!/data/data/com.termux/files/usr/bin/sh
-termux-wake-lock
-cd ~/cgm-dashboard && ./start.sh >> server.log 2>&1
-EOF
-chmod +x ~/.termux/boot/cgm-dashboard
-```
+The Echo has no battery, so any power blip reboots it. With Termux:Boot
+installed and **Launch on Boot** on, the dashboard comes back by itself.
+Test it by unplugging the Echo and plugging it back in; give it about two
+minutes.
 
 ## Everyday use
 
 - **Stop:** press CTRL then c in Termux. If you only kill the Python
   process, `start.sh` brings it back 10 seconds later.
-- **Update:** `cd ~/cgm-dashboard && git pull`, then restart.
-- **After `pkg upgrade` moves Python to a new version**, re-run
-  `bash ~/install_pydantic_core.sh` and `pip install flask pylibrelinkup`.
-  Until you do, the page shows *Dashboard server not responding*.
+- **Update, or fix things after `pkg upgrade` moves Python to a new
+  version:** run `bash ~/cgm-dashboard/install.sh` again. It keeps your
+  `config.env`. Then restart.
 - **Settings:** alarm thresholds, snooze length, the stale-data timeout and
-  the poll interval are all in `config.env` (see `config.env.example`).
+  the poll interval can all go in `config.env` (see `config.env.example`).
+- **Logs:** when started at boot, the server writes to
+  `~/cgm-dashboard/server.log`.
 
 ## Troubleshooting
 
@@ -214,7 +202,9 @@ chmod +x ~/.termux/boot/cgm-dashboard
 | `Permission denied` running `start.sh` | You're running it from `/sdcard`. Use `~/cgm-dashboard`. |
 | `cannot stat '/sdcard/…'` | Run `termux-setup-storage` and tap Allow. |
 | `curl: failed writing body` | Storage is full. Delete any swap file you made. |
-| *Dashboard server not responding* | Termux was stopped. Start it again, and set up step 7. |
+| *Dashboard server not responding* | Termux was stopped. Start it again, and check Termux:Boot is installed and you tapped its icon once. |
+| Nothing starts after a reboot | Set Termux:Boot to *Don't optimize* (step 1) and tap its icon once, then check `~/cgm-dashboard/server.log`. |
+| Fully doesn't open after a reboot | Allow Fully to *Display over other apps* (step 5). |
 
 ## How it works
 
@@ -225,6 +215,7 @@ cgm-dashboard/
 ├── static/alarm.mp3     Alarm sound (replace with any MP3)
 ├── config.env.example   Settings template → copy to config.env
 ├── start.sh             Loads config.env, holds a wake lock, restarts on crash
+├── install.sh           One-command installer and updater for Termux
 └── requirements.txt
 ```
 
