@@ -59,13 +59,6 @@ Fully Kiosk Browser shows the number full-screen with high/low alarms.
    adb install termux-boot-app_<version>+github.debug.apk
    adb install <fully-kiosk>.apk
    ```
-   Then **tap Termux:Boot's icon once** on the Echo. Until you do, Android
-   never runs its startup job (opening it through adb doesn't count).
-3. Stop Android from holding Termux back in the background: **Settings → Apps
-   & notifications → Special app access → Battery optimization → All apps**,
-   and set both **Termux** and **Termux:Boot** to **Don't optimize**. Without
-   this, Android can sit on Termux:Boot's startup job after a reboot and the
-   dashboard never starts.
 
 > **Tip:** typing on a 5-inch screen is painful. You can type any command
 > into the open Termux window from your computer:
@@ -82,7 +75,8 @@ curl -fsSLO https://raw.githubusercontent.com/Velcy-a/echo-show-cgm-dashboard/ma
 [`install.sh`](install.sh) does the rest. It updates Termux, installs Python,
 Flask and pylibrelinkup, downloads the dashboard into `~/cgm-dashboard`, asks
 for your LibreLinkUp email and password, and sets it up to start
-automatically. It takes a few minutes.
+automatically. At the end it walks you through the three Android settings
+autostart needs, opening each settings screen for you. It takes a few minutes.
 
 One dependency, `pydantic-core`, is written in Rust and has no official
 Android build, and compiling it on the Echo runs out of memory. So the
@@ -109,6 +103,12 @@ mkdir -p ~/.termux/boot
 printf '#!/data/data/com.termux/files/usr/bin/sh\ntermux-wake-lock\ncd /data/data/com.termux/files/home/cgm-dashboard && ./start.sh >> server.log 2>&1\n' > ~/.termux/boot/cgm-boot.sh
 chmod +x ~/.termux/boot/cgm-boot.sh
 ```
+
+Then do the Android settings the installer would walk you through: open
+Termux:Boot once by tapping its icon, set Termux and Termux:Boot to
+*Don't optimize* under **Settings → Apps & notifications → Special app
+access → Battery optimization**, and allow Fully Kiosk Browser under
+**Display over other apps** on the same screen.
 
 Keep it in Termux's home folder (`~`). Android won't run scripts from
 `/sdcard`, so starting it from Downloads fails with *Permission denied*.
@@ -163,10 +163,7 @@ All of these are in the free version; nothing here needs a Fully PLUS license.
 - **Web Content Settings → Autoplay Audio:** on. Without it, the page asks
   for one tap after each load before it can play the alarm.
 - **Device Management → Keep Screen On:** on
-- **Device Management → Launch on Boot:** on. Android 10 and newer also
-  need **Settings → Apps & notifications → Special app access → Display over
-  other apps → Fully Kiosk Browser → Allow**, or Android blocks Fully from
-  opening at startup.
+- **Device Management → Launch on Boot:** on
 - **Web Auto Reload → Auto Reload after Page Error:** 10 seconds. Fully
   usually starts before the server does; this makes it retry until the
   dashboard loads.
@@ -202,9 +199,8 @@ minutes.
 | `Permission denied` running `start.sh` | You're running it from `/sdcard`. Use `~/cgm-dashboard`. |
 | `cannot stat '/sdcard/…'` | Run `termux-setup-storage` and tap Allow. |
 | `curl: failed writing body` | Storage is full. Delete any swap file you made. |
-| *Dashboard server not responding* | Termux was stopped. Start it again, and check Termux:Boot is installed and you tapped its icon once. |
-| Nothing starts after a reboot | Set Termux:Boot to *Don't optimize* (step 1) and tap its icon once, then check `~/cgm-dashboard/server.log`. |
-| Fully doesn't open after a reboot | Allow Fully to *Display over other apps* (step 5). |
+| *Dashboard server not responding* | Termux was stopped. Start it again, and check Termux:Boot is installed. |
+| Nothing starts after a reboot, or Fully doesn't open | Run `bash ~/cgm-dashboard/install.sh` again and do the Android settings walkthrough at the end. The server's log is `~/cgm-dashboard/server.log`. |
 
 ## How it works
 

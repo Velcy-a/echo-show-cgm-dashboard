@@ -73,18 +73,45 @@ termux-wake-lock
 cd "$DIR" && exec ./start.sh
 EOF
 chmod +x "$BOOT"
-# Android holds back Termux:Boot's startup job unless the app is exempt from
-# battery optimization and you've tapped its icon yourself at least once.
-echo "Make sure the Termux:Boot app is installed, that you've tapped its icon once,"
-echo "and that Termux and Termux:Boot are both set to \"Don't optimize\" in"
-echo "Settings > Apps & notifications > Special app access > Battery optimization."
+if [ ! -d /data/data/com.termux.boot ]; then
+  echo "Termux:Boot isn't installed, so nothing will start after a reboot."
+  echo "Install it (see the README), then run this script again."
+fi
+
+# Android 11 blocks autostart unless these are set; they can only be changed
+# by hand, so open each screen and wait.
+ask() { read -rp "  $1 " _ < /dev/tty; }
+read -rp $'\nWalk through the Android settings autostart needs? [Y/n] ' ans < /dev/tty
+case $ans in
+  [Nn]*) ;;
+  *)
+    say "1/3  Open Termux:Boot once"
+    echo "  Open the app drawer, tap Termux:Boot, then come back to Termux."
+    echo "  Android won't run its startup job until you've opened it yourself."
+    ask "Press Enter when done."
+
+    say "2/3  Battery optimization"
+    echo "  Switch the list to \"All apps\" and set both Termux and Termux:Boot"
+    echo "  to \"Don't optimize\", or Android can hold back the startup job."
+    ask "Press Enter to open that screen, then come back here."
+    am start -a android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS >/dev/null 2>&1 ||
+      echo "  Open it yourself: Settings > Apps & notifications > Special app access > Battery optimization"
+    ask "Press Enter when done."
+
+    say "3/3  Let Fully Kiosk open itself at startup"
+    echo "  Turn on \"Allow display over other apps\" for Fully Kiosk Browser."
+    ask "Press Enter to open that screen, then come back here."
+    am start -a android.settings.action.MANAGE_OVERLAY_PERMISSION -d package:de.ozerov.fully >/dev/null 2>&1 ||
+      echo "  Open it yourself: Settings > Apps & notifications > Special app access > Display over other apps"
+    ask "Press Enter when done."
+    ;;
+esac
 
 say "Done"
 cat <<EOF
-In Fully Kiosk: Start URL http://localhost:5000, and turn on Autoplay Audio,
-Keep Screen On, Launch on Boot, and Auto Reload after Page Error (10 s).
-In Android settings, allow Fully to "Display over other apps", or it can't
-open itself at startup.
+Last step, in Fully Kiosk's settings: Start URL http://localhost:5000, and
+turn on Autoplay Audio, Keep Screen On, Launch on Boot, and Auto Reload after
+Page Error (10 s).
 
 Try it with fake data:  cd ~/cgm-dashboard && ./start.sh --mock
 Run it for real:        cd ~/cgm-dashboard && ./start.sh
